@@ -106,7 +106,8 @@ static SGKaraokeLine *enhancedLine(NSString *payload, NSInteger fallbackStart, B
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         kind = [NSRegularExpression regularExpressionWithPattern:@"^\\[(v1|bg|backing)\\s*:\\s*(.*)\\]$" options:NSRegularExpressionCaseInsensitive error:nil];
-        wordStamp = [NSRegularExpression regularExpressionWithPattern:@"<(?:(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?)>" options:0 error:nil];
+        // `<start>` keeps the old format; `<start,end>` gives the word an explicit end.
+        wordStamp = [NSRegularExpression regularExpressionWithPattern:@"<(?:(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?)(?:,(?:(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?))?>" options:0 error:nil];
     });
     NSTextCheckingResult *typed = [kind firstMatchInString:payload options:0 range:NSMakeRange(0, payload.length)];
     if (!typed) return nil;
@@ -128,6 +129,18 @@ static SGKaraokeLine *enhancedLine(NSString *payload, NSInteger fallbackStart, B
             fraction = digits.integerValue * (digits.length == 1 ? 100 : digits.length == 2 ? 10 : 1);
         }
         NSInteger start = (minutes * 60 + seconds) * 1000 + fraction;
+        NSInteger end = 0;
+        NSRange endMinutes = [match rangeAtIndex:4];
+        if (endMinutes.location != NSNotFound) {
+            NSInteger endSeconds = [body substringWithRange:[match rangeAtIndex:5]].integerValue;
+            NSInteger endFraction = 0;
+            NSRange endPart = [match rangeAtIndex:6];
+            if (endPart.location != NSNotFound) {
+                NSString *digits = [body substringWithRange:endPart];
+                endFraction = digits.integerValue * (digits.length == 1 ? 100 : digits.length == 2 ? 10 : 1);
+            }
+            end = ([body substringWithRange:endMinutes].integerValue * 60 + endSeconds) * 1000 + endFraction;
+        }
         NSUInteger textStart = NSMaxRange(match.range);
         NSUInteger textEnd = i + 1 < matches.count ? matches[i + 1].range.location : body.length;
         NSString *text = trimmed([body substringWithRange:NSMakeRange(textStart, textEnd - textStart)]);
@@ -135,12 +148,17 @@ static SGKaraokeLine *enhancedLine(NSString *payload, NSInteger fallbackStart, B
         SGKaraokeWord *word = [SGKaraokeWord new];
         word.text = text;
         word.start = start;
+        if (end > start) word.end = end;
         if (i + 1 < matches.count) word.end = start + (NSInteger)MAX(1, [body substringWithRange:NSMakeRange(matches[i + 1].range.location, 1)].length);
         [words addObject:word];
     }
     if (!words.count) return nil;
-    for (NSUInteger i = 0; i + 1 < words.count; i++) words[i].end = words[i + 1].start;
-    words.lastObject.end = MAX(words.lastObject.start + 1, fallbackStart);
+    for (NSUInteger i = 0; i + 1 < words.count; i++) {
+        if (words[i].end <= words[i].start) words[i].end = words[i + 1].start;
+    }
+    if (words.lastObject.end <= words.lastObject.start) {
+        words.lastObject.end = MAX(words.lastObject.start + 120, fallbackStart);
+    }
     SGKaraokeLine *line = [SGKaraokeLine new];
     line.words = words;
     line.start = words.firstObject.start;
