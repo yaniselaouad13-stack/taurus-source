@@ -206,6 +206,12 @@ static SGLRCSheet *sheetFrom(NSString *lrc) {
             NSInteger seconds = [row substringWithRange:[first rangeAtIndex:2]].integerValue;
             lineStart = (minutes * 60 + seconds) * 1000;
         }
+        // Instrumental sections are timed markers, not sung lines. Both spellings are accepted.
+        NSString *marker = [text.lowercaseString stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if ([marker isEqualToString:@"[inst]"] || [marker isEqualToString:@"[instrumental]"]) {
+            [stamped addObject:@[@(lineStart), @"♪ Instrumental ♪"]];
+            continue;
+        }
         SGKaraokeLine *enhanced = enhancedLine(text, lineStart, &background);
         if (enhanced) {
             [stamped addObject:@[@(enhanced.start), enhanced, @(background)]];
