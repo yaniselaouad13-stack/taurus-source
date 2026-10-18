@@ -175,7 +175,22 @@ static UILabel *label(UIFontTextStyle style, UIFontWeight weight, CGFloat size, 
         text.text = SGKaraokeLineText(line);
         text.textAlignment = NSTextAlignmentCenter;
         text.alpha = _timed ? kOtherAlpha : 1;
-        [_stack addArrangedSubview:text];
+        if (line.backing) {
+            UIStackView *voices = [UIStackView new];
+            voices.axis = UILayoutConstraintAxisVertical;
+            voices.alignment = UIStackViewAlignmentCenter;
+            voices.spacing = 2;
+            voices.translatesAutoresizingMaskIntoConstraints = NO;
+            [voices addArrangedSubview:text];
+            UILabel *back = label(UIFontTextStyleSubheadline, UIFontWeightRegular, 15, [UIColor colorWithWhite:1 alpha:0.62]);
+            back.text = SGKaraokeLineText(line.backing);
+            back.textAlignment = NSTextAlignmentCenter;
+            back.alpha = _timed ? kOtherAlpha : 1;
+            [voices addArrangedSubview:back];
+            [_stack addArrangedSubview:voices];
+        } else {
+            [_stack addArrangedSubview:text];
+        }
         [labels addObject:text];
     }
     _labels = labels;

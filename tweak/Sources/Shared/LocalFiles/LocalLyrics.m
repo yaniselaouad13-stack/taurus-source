@@ -98,6 +98,58 @@ static NSString *trimmed(NSString *text) {
     return [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
 }
 
+// Enhanced LRC as exported by the local BGV editor:
+// [00:12.81][v1:<00:12.81>word <00:12.97>word]
+// [00:14.65][bg:<00:14.65>ad-lib]
+static SGKaraokeLine *enhancedLine(NSString *payload, NSInteger fallbackStart, BOOL *background) {
+    static NSRegularExpression *kind, *wordStamp;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        kind = [NSRegularExpression regularExpressionWithPattern:@"^\\[(v1|bg|backing)\\s*:\\s*(.*)\\]$" options:NSRegularExpressionCaseInsensitive error:nil];
+        wordStamp = [NSRegularExpression regularExpressionWithPattern:@"<(?:(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?)>" options:0 error:nil];
+    });
+    NSTextCheckingResult *typed = [kind firstMatchInString:payload options:0 range:NSMakeRange(0, payload.length)];
+    if (!typed) return nil;
+    NSString *voice = [[payload substringWithRange:[typed rangeAtIndex:1]] lowercaseString];
+    NSString *body = [payload substringWithRange:[typed rangeAtIndex:2]];
+    BOOL isBacking = [voice isEqualToString:@"bg"] || [voice isEqualToString:@"backing"];
+    if (background) *background = isBacking;
+    NSArray<NSTextCheckingResult *> *matches = [wordStamp matchesInString:body options:0 range:NSMakeRange(0, body.length)];
+    if (!matches.count) return nil;
+    NSMutableArray<SGKaraokeWord *> *words = [NSMutableArray array];
+    for (NSUInteger i = 0; i < matches.count; i++) {
+        NSTextCheckingResult *match = matches[i];
+        NSInteger minutes = [body substringWithRange:[match rangeAtIndex:1]].integerValue;
+        NSInteger seconds = [body substringWithRange:[match rangeAtIndex:2]].integerValue;
+        NSInteger fraction = 0;
+        NSRange part = [match rangeAtIndex:3];
+        if (part.location != NSNotFound) {
+            NSString *digits = [body substringWithRange:part];
+            fraction = digits.integerValue * (digits.length == 1 ? 100 : digits.length == 2 ? 10 : 1);
+        }
+        NSInteger start = (minutes * 60 + seconds) * 1000 + fraction;
+        NSUInteger textStart = NSMaxRange(match.range);
+        NSUInteger textEnd = i + 1 < matches.count ? matches[i + 1].range.location : body.length;
+        NSString *text = trimmed([body substringWithRange:NSMakeRange(textStart, textEnd - textStart)]);
+        if (!text.length) continue;
+        SGKaraokeWord *word = [SGKaraokeWord new];
+        word.text = text;
+        word.start = start;
+        if (i + 1 < matches.count) word.end = start + (NSInteger)MAX(1, [body substringWithRange:NSMakeRange(matches[i + 1].range.location, 1)].length);
+        [words addObject:word];
+    }
+    if (!words.count) return nil;
+    for (NSUInteger i = 0; i + 1 < words.count; i++) words[i].end = words[i + 1].start;
+    words.lastObject.end = MAX(words.lastObject.start + 1, fallbackStart);
+    SGKaraokeLine *line = [SGKaraokeLine new];
+    line.words = words;
+    line.start = words.firstObject.start;
+    line.end = words.lastObject.end;
+    line.voice = voice;
+    line.timing = SGKaraokeTimingWords;
+    return line;
+}
+
 // [01:02], [01:02.3], [01:02.34], [01:02.345], [101:02:34]: minutes of one to three digits, and a ":"
 // before the fraction as some editors write it. A line sung more than once carries a stamp per time.
 static SGLRCSheet *sheetFrom(NSString *lrc) {
@@ -128,6 +180,19 @@ static SGLRCSheet *sheetFrom(NSString *lrc) {
             continue;
         }
         NSString *text = trimmed([stamp stringByReplacingMatchesInString:row options:0 range:NSMakeRange(0, row.length) withTemplate:@""]);
+        BOOL background = NO;
+        NSInteger lineStart = 0;
+        if (found.count) {
+            NSTextCheckingResult *first = found.firstObject;
+            NSInteger minutes = [row substringWithRange:[first rangeAtIndex:1]].integerValue;
+            NSInteger seconds = [row substringWithRange:[first rangeAtIndex:2]].integerValue;
+            lineStart = (minutes * 60 + seconds) * 1000;
+        }
+        SGKaraokeLine *enhanced = enhancedLine(text, lineStart, &background);
+        if (enhanced) {
+            [stamped addObject:@[@(enhanced.start), enhanced, @(background)]];
+            continue;
+        }
         if (!text.length) continue;
         for (NSTextCheckingResult *match in found) {
             NSInteger minutes = [row substringWithRange:[match rangeAtIndex:1]].integerValue;
@@ -148,11 +213,25 @@ static SGLRCSheet *sheetFrom(NSString *lrc) {
         NSMutableArray<NSNumber *> *starts = [NSMutableArray array];
         NSMutableArray<NSString *> *texts = [NSMutableArray array];
         // A positive offset brings the lyrics in sooner.
+        NSMutableArray<SGKaraokeLine *> *enhancedLines = [NSMutableArray array];
+        NSMutableArray<SGKaraokeLine *> *enhancedBackings = [NSMutableArray array];
         for (NSArray *line in stamped) {
+            if (line.count == 3 && [line[1] isKindOfClass:SGKaraokeLine.class]) {
+                if ([line[2] boolValue]) [enhancedBackings addObject:line[1]];
+                else [enhancedLines addObject:line[1]];
+                continue;
+            }
             [starts addObject:@(MAX([line[0] integerValue] - offset, 0))];
             [texts addObject:line[1]];
         }
-        sheet.lines = SGKaraokeEstimatedLines(starts, texts);
+        sheet.lines = enhancedLines.count ? enhancedLines : SGKaraokeEstimatedLines(starts, texts);
+        for (SGKaraokeLine *backing in enhancedBackings) {
+            SGKaraokeLine *nearest = nil;
+            for (SGKaraokeLine *main in sheet.lines) {
+                if (main.start <= backing.start && (!nearest || main.start > nearest.start)) nearest = main;
+            }
+            if (nearest) nearest.backing = backing;
+        }
         sheet.synced = YES;
         NSArray<NSNumber *> *pageStarts;
         NSArray<NSString *> *pageTexts;
