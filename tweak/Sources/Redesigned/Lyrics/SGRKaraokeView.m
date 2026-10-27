@@ -22,7 +22,7 @@
 
 static const CGFloat kFontSize = 30, kMargin = 24, kLineGap = 24, kRowTighten = 2;
 static const CGFloat kCompactMargin = 24, kCompactGap = 6;   // the preview under the player's cover: tighter room, a peek of the next line
-static const CGFloat kDimAlpha = 0.3, kFillEdge = 22, kLift = 2.5, kDimScale = 0.97;
+static const CGFloat kDimAlpha = 0.42, kFillEdge = 22, kLift = 2.5, kDimScale = 0.97;
 static const CGFloat kAnchor = 0.28;   // where the sung line rests, as a share of the height
 static const CGFloat kEdgeFade = 0.1;  // the lines fade out over this share at the top and bottom
 static const CGFloat kBlurPerLine = 1.4, kMaxBlur = 6;
@@ -289,17 +289,33 @@ static NSUInteger flow(NSArray<SGKaraokeWord *> *words, UIFont *font, CGFloat wi
     CGFloat space = ceil([@" " sizeWithAttributes:@{NSFontAttributeName: font}].width), x = 0, offset = 0;
     NSUInteger row = 0;
     for (NSUInteger i = 0; i < words.count; i++) {
-        CGFloat wide = ceil([words[i].text sizeWithAttributes:@{NSFontAttributeName: font}].width);
+        // Sources can time a hyphenated word as separate fragments (`tom-` and `ombe`).
+        // Measure the complete fragment group before deciding to wrap, otherwise the line
+        // breaks inside the word and reads as `tom-` / `ombe`.
+        NSUInteger groupEnd = i;
+        CGFloat groupWidth = 0;
+        while (groupEnd < words.count) {
+            NSString *part = words[groupEnd].text ?: @"";
+            groupWidth += ceil([part sizeWithAttributes:@{NSFontAttributeName: font}].width);
+            BOOL continues = [part hasSuffix:@"-"] || [part hasSuffix:@"‐"] || [part hasSuffix:@"‑"] || [part hasSuffix:@"–"];
+            groupEnd++;
+            if (!continues) break;
+        }
         CGFloat lead = x > 0 && !words[i].joined ? space : 0;
-        if (x > 0 && x + lead + wide > width) {
+        if (x > 0 && x + lead + groupWidth > width) {
             x = lead = 0;
             row++;
         }
-        x += lead;
-        offset += lead;
-        places[i] = (SGRPlace){x, wide, offset, row};
-        x += wide;
-        offset += wide;
+        for (NSUInteger part = i; part < groupEnd; part++) {
+            CGFloat wide = ceil([words[part].text sizeWithAttributes:@{NSFontAttributeName: font}].width);
+            CGFloat partLead = part == i ? lead : 0;
+            x += partLead;
+            offset += partLead;
+            places[part] = (SGRPlace){x, wide, offset, row};
+            x += wide;
+            offset += wide;
+        }
+        i = groupEnd - 1;
     }
     return words.count ? row + 1 : 0;
 }
