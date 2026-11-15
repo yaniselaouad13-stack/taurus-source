@@ -148,6 +148,13 @@ static SGKaraokeLine *enhancedLine(NSString *payload, NSInteger fallbackStart, B
         SGKaraokeWord *word = [SGKaraokeWord new];
         word.text = text;
         word.start = start;
+        // Enhanced LRC may omit whitespace between timed syllable fragments. Preserve that
+        // distinction so `Mo` + `na` + `co` stays one visual word while real words remain spaced.
+        if (i > 0) {
+            NSRange previousEnd = NSMakeRange(NSMaxRange(matches[i - 1].range), match.range.location - NSMaxRange(matches[i - 1].range));
+            NSString *separator = [body substringWithRange:previousEnd];
+            word.joined = [separator rangeOfCharacterFromSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].location == NSNotFound;
+        }
         if (end > start) word.end = end;
         if (i + 1 < matches.count) word.end = start + (NSInteger)MAX(1, [body substringWithRange:NSMakeRange(matches[i + 1].range.location, 1)].length);
         [words addObject:word];
